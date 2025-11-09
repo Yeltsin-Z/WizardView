@@ -21,7 +21,13 @@ import requests
 import base64
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'staffview-secret-key-change-in-production')
+app.secret_key = os.environ.get('SECRET_KEY', 'wizardview-dev-key-change-in-production')
+
+# Session configuration for production (Render)
+app.config['SESSION_COOKIE_SECURE'] = True  # Only send cookie over HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True  # Prevent JavaScript access to session cookie
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # CSRF protection while allowing normal navigation
+app.config['PERMANENT_SESSION_LIFETIME'] = 86400  # 24 hours session timeout
 
 # Linear Configuration
 # Set these as environment variables in production
@@ -258,6 +264,7 @@ def login():
         
         # Check credentials
         if username in USERS and check_password_hash(USERS[username], password):
+            session.permanent = True  # Make session last for PERMANENT_SESSION_LIFETIME
             session['logged_in'] = True
             session['username'] = username
             

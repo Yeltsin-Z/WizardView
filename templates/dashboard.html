@@ -583,6 +583,23 @@
                     body: formData
                 });
                 
+                // Check if response is JSON or HTML (redirect to login)
+                const contentType = response.headers.get('content-type');
+                if (!response.ok) {
+                    if (response.status === 401 || response.status === 302) {
+                        // Session expired, redirect to login
+                        window.location.href = '/login?redirect=/';
+                        return;
+                    }
+                    throw new Error(`Upload failed with status ${response.status}`);
+                }
+                
+                if (!contentType || !contentType.includes('application/json')) {
+                    // Got HTML instead of JSON - likely redirected to login
+                    window.location.href = '/login?redirect=/';
+                    return;
+                }
+                
                 const data = await response.json();
                 
                 if (data.success) {
