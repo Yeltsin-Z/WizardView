@@ -1173,6 +1173,23 @@
             monacoLoaded = true;
         });
 
+        // Helper function to handle API calls with authentication
+        async function fetchAPI(url, options = {}) {
+            const response = await fetch(url, options);
+            
+            // Check if authentication failed
+            if (response.status === 401) {
+                const data = await response.json();
+                showToast('Session expired. Redirecting to login...', '🔒');
+                setTimeout(() => {
+                    window.location.href = data.redirect || '/login';
+                }, 1500);
+                throw new Error('Authentication required');
+            }
+            
+            return response;
+        }
+
         // Load structure on page load
         document.addEventListener('DOMContentLoaded', async () => {
             await loadStructure();
@@ -1180,7 +1197,7 @@
 
         async function loadStructure() {
             try {
-                const response = await fetch('/api/structure');
+                const response = await fetchAPI('/api/structure');
                 currentStructure = await response.json();
                 renderSidebar();
             } catch (error) {
@@ -1290,7 +1307,7 @@
             `;
 
             try {
-                const response = await fetch(`/api/compare?folder=${folderId}&file=${fileId}`);
+                const response = await fetchAPI(`/api/compare?folder=${folderId}&file=${fileId}`);
                 const data = await response.json();
                 
                 renderDiffEditor(data);
@@ -1662,7 +1679,7 @@
         async function copyFileToClipboard(folderId, fileId) {
             try {
                 console.log('Copying file metadata:', folderId, fileId);
-                const response = await fetch(`/api/compare?folder=${folderId}&file=${fileId}`);
+                const response = await fetchAPI(`/api/compare?folder=${folderId}&file=${fileId}`);
                 const data = await response.json();
 
                 if (data.error) {
@@ -1862,7 +1879,7 @@
             const assigneeSelect = document.getElementById('linearAssignee');
             
             try {
-                const response = await fetch('/api/linear/team-members');
+                const response = await fetchAPI('/api/linear/team-members');
                 const data = await response.json();
                 
                 if (data.success) {
@@ -1902,7 +1919,7 @@
             
             try {
                 // Create the Linear issue with optional ZIP attachment
-                const response = await fetch('/api/linear/create-issue', {
+                const response = await fetchAPI('/api/linear/create-issue', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'

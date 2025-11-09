@@ -21,13 +21,7 @@ import requests
 import base64
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'wizardview-dev-key-change-in-production')
-
-# Session configuration for production (Render)
-app.config['SESSION_COOKIE_SECURE'] = True  # Only send cookie over HTTPS
-app.config['SESSION_COOKIE_HTTPONLY'] = True  # Prevent JavaScript access to session cookie
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # CSRF protection while allowing normal navigation
-app.config['PERMANENT_SESSION_LIFETIME'] = 86400  # 24 hours session timeout
+app.secret_key = os.environ.get('SECRET_KEY', 'staffview-secret-key-change-in-production')
 
 # Linear Configuration
 # Set these as environment variables in production
@@ -67,6 +61,9 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'logged_in' not in session:
+            # Check if this is an API request (JSON expected)
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'Authentication required', 'redirect': '/login'}), 401
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
@@ -264,7 +261,6 @@ def login():
         
         # Check credentials
         if username in USERS and check_password_hash(USERS[username], password):
-            session.permanent = True  # Make session last for PERMANENT_SESSION_LIFETIME
             session['logged_in'] = True
             session['username'] = username
             
