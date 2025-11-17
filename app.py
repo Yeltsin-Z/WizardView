@@ -70,9 +70,72 @@ def login_required(f):
 
 
 def extract_artifact(zip_path, extract_to):
-    """Extract scroll bundle zip file"""
+    """
+    Extract scroll bundle zip file and normalize to standard format.
+    
+    Supports two formats:
+    - Format 1 (Old): folder/main/FILE.csv and folder/feat/FILE.csv
+    - Format 2 (New): folder/main-FILE and folder/feat-FILE
+    
+    Both are normalized to Format 2 internally.
+    """
+    import shutil
+    
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(extract_to)
+        # Extract to a temporary location first
+        temp_extract = Path(extract_to) / '_temp_extract'
+        temp_extract.mkdir(parents=True, exist_ok=True)
+        zip_ref.extractall(temp_extract)
+        
+        # Detect format and normalize
+        print(f"📦 Analyzing artifact structure...", flush=True)
+        
+        for folder in temp_extract.iterdir():
+            if not folder.is_dir():
+                continue
+                
+            folder_id = folder.name
+            target_folder = Path(extract_to) / folder_id
+            target_folder.mkdir(parents=True, exist_ok=True)
+            
+            # Check if this is Format 1 (has main/ and feat/ subdirectories)
+            main_dir = folder / 'main'
+            feat_dir = folder / 'feat'
+            
+            if main_dir.exists() and feat_dir.exists():
+                # Format 1: Convert folder/main/FILE.csv → folder/main-FILE
+                print(f"   Format 1 detected for tenant {folder_id} (main/ and feat/ subdirs)", flush=True)
+                
+                # Process main files
+                for file_path in main_dir.iterdir():
+                    if file_path.is_file():
+                        # Remove .csv extension if present
+                        file_name = file_path.stem if file_path.suffix == '.csv' else file_path.name
+                        target_path = target_folder / f"main-{file_name}"
+                        shutil.copy2(file_path, target_path)
+                        print(f"      ✓ Converted: {file_path.name} → main-{file_name}", flush=True)
+                
+                # Process feat files
+                for file_path in feat_dir.iterdir():
+                    if file_path.is_file():
+                        # Remove .csv extension if present
+                        file_name = file_path.stem if file_path.suffix == '.csv' else file_path.name
+                        target_path = target_folder / f"feat-{file_name}"
+                        shutil.copy2(file_path, target_path)
+                        print(f"      ✓ Converted: {file_path.name} → feat-{file_name}", flush=True)
+            else:
+                # Format 2: Files are already named main-FILE and feat-FILE
+                print(f"   Format 2 detected for tenant {folder_id} (flat structure)", flush=True)
+                for file_path in folder.iterdir():
+                    if file_path.is_file():
+                        target_path = target_folder / file_path.name
+                        shutil.copy2(file_path, target_path)
+                        print(f"      ✓ Copied: {file_path.name}", flush=True)
+        
+        # Clean up temp directory
+        shutil.rmtree(temp_extract)
+        print(f"✅ Artifact extraction complete!\n", flush=True)
+    
     return extract_to
 
 
@@ -702,16 +765,17 @@ def create_linear_issue():
                 print(f"✅ Tenant folder exists: {tenant_path}", flush=True)
                 print(f"📦 Creating ZIP for {file_id} from tenant {folder_id}", flush=True)
                 
-                # Try multiple file path patterns
-                # Pattern 1: tenant/main/MODEL.csv and tenant/feat/MODEL.csv
-                # Pattern 2: tenant/MODEL-main and tenant/MODEL-feat (no extension)
+                # After normalization, all files are in Format 2: tenant/main-FILE and tenant/feat-FILE
+                # But we keep legacy patterns for backwards compatibility
                 main_patterns = [
-                    os.path.join(tenant_path, 'main', f"{file_id}.csv"),
-                    os.path.join(tenant_path, f"{file_id}-main"),
+                    os.path.join(tenant_path, f"main-{file_id}"),      # Normalized format (preferred)
+                    os.path.join(tenant_path, 'main', f"{file_id}.csv"),  # Legacy format
+                    os.path.join(tenant_path, f"{file_id}-main"),      # Alternative naming
                 ]
                 feat_patterns = [
-                    os.path.join(tenant_path, 'feat', f"{file_id}.csv"),
-                    os.path.join(tenant_path, f"{file_id}-feat"),
+                    os.path.join(tenant_path, f"feat-{file_id}"),      # Normalized format (preferred)
+                    os.path.join(tenant_path, 'feat', f"{file_id}.csv"),  # Legacy format
+                    os.path.join(tenant_path, f"{file_id}-feat"),      # Alternative naming
                 ]
                 
                 # Check if files exist
