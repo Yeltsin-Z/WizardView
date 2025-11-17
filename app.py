@@ -21,7 +21,19 @@ import requests
 import base64
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'staffview-secret-key-change-in-production')
+
+# SECRET_KEY is required for session security
+# Must be set via environment variable in production
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    # In development, use a default key with warning
+    if os.environ.get('FLASK_ENV') == 'development' or __name__ == '__main__':
+        SECRET_KEY = 'dev-secret-key-INSECURE-change-for-production'
+        print("⚠️  WARNING: Using insecure development SECRET_KEY!", flush=True)
+    else:
+        raise ValueError("SECRET_KEY environment variable must be set in production!")
+
+app.secret_key = SECRET_KEY
 
 # Linear Configuration
 # Set these as environment variables in production
@@ -38,13 +50,18 @@ UPLOAD_FOLDER.mkdir(exist_ok=True)
 default_artifacts = UPLOAD_FOLDER / "extracted"
 ARTIFACTS_DIR = Path(os.getenv('ARTIFACTS_DIR', str(default_artifacts)))
 
-# If default local path exists, use it (for development)
-local_dev_path = Path("/Users/yeltsinz/Downloads/regression-diffs (1)")
-if local_dev_path.exists():
-    print(f"⚠️  Using hardcoded dev path: {local_dev_path}", flush=True)
-    ARTIFACTS_DIR = local_dev_path
-else:
-    print(f"✅ Using dynamic artifacts path: {ARTIFACTS_DIR}", flush=True)
+# For local development convenience, allow DEV_ARTIFACTS_PATH
+# This is ONLY used if explicitly set via environment variable
+dev_artifacts_override = os.getenv('DEV_ARTIFACTS_PATH')
+if dev_artifacts_override:
+    dev_path = Path(dev_artifacts_override)
+    if dev_path.exists():
+        print(f"⚠️  DEV MODE: Using DEV_ARTIFACTS_PATH: {dev_path}", flush=True)
+        ARTIFACTS_DIR = dev_path
+    else:
+        print(f"⚠️  DEV_ARTIFACTS_PATH set but doesn't exist: {dev_path}", flush=True)
+
+print(f"✅ Artifacts directory: {ARTIFACTS_DIR}", flush=True)
 
 # Directory for storing ZIP files for Linear attachments
 LINEAR_ATTACHMENTS_DIR = Path(__file__).parent / 'linear_attachments'
@@ -53,11 +70,19 @@ LINEAR_ATTACHMENTS_DIR.mkdir(exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
 
-# Simple user storage (in production, use a database)
+# User authentication configuration
+# Can be overridden with environment variables for production
+# Format: USERNAME=email PASSWORD=plaintext (will be hashed)
+DEFAULT_USERNAME = os.getenv('AUTH_USERNAME', 'sdet-team@drivetrain.ai')
+DEFAULT_PASSWORD = os.getenv('AUTH_PASSWORD', 'OneRing2RuleThemAll')
+
+# Simple user storage (in production, use a database or SSO)
 # Password is hashed using werkzeug.security
 USERS = {
-    'sdet-team@drivetrain.ai': generate_password_hash('OneRing2RuleThemAll'),
+    DEFAULT_USERNAME: generate_password_hash(DEFAULT_PASSWORD),
 }
+
+print(f"✅ Authentication configured for user: {DEFAULT_USERNAME}", flush=True)
 
 # Login required decorator
 def login_required(f):
@@ -550,9 +575,17 @@ def use_sample():
     """Use the sample scroll directory (development only)"""
     global ARTIFACTS_DIR
     
-    # Try to get sample path from environment variable first
-    sample_path = os.getenv('SAMPLE_SCROLLS_PATH', '/Users/yeltsinz/Downloads/regression-diffs (1)')
-    sample_path = Path(sample_path)
+    # SAMPLE_SCROLLS_PATH must be set via environment variable
+    sample_path_str = os.getenv('SAMPLE_SCROLLS_PATH')
+    if not sample_path_str:
+        return jsonify({
+            'success': False,
+            'error': 'SAMPLE_SCROLLS_PATH not configured',
+            'message': 'Set SAMPLE_SCROLLS_PATH environment variable to use sample scrolls',
+            'hint': 'This endpoint is for development only. Upload scrolls via the dashboard in production.'
+        }), 400
+    
+    sample_path = Path(sample_path_str)
     
     # Verify the path exists before using it
     if not sample_path.exists():
@@ -1155,9 +1188,52 @@ def create_linear_issue():
         return jsonify({'success': False, 'error': f'Failed to parse issue response: {str(e)}'}), 500
 
 
+def validate_production_config():
+    """Validate configuration for production deployment"""
+    issues = []
+    warnings = []
+    
+    # Check critical environment variables
+    if not os.getenv('SECRET_KEY'):
+        warnings.append("SECRET_KEY not set - using insecure development key")
+    
+    if not LINEAR_API_KEY:
+        warnings.append("LINEAR_API_KEY not set - Linear integration will not work")
+    
+    if not os.getenv('WIZARDVIEW_URL'):
+        warnings.append("WIZARDVIEW_URL not set - using default URL for Linear links")
+    
+    # Check if using default credentials
+    if os.getenv('AUTH_USERNAME') == 'sdet-team@drivetrain.ai' or not os.getenv('AUTH_USERNAME'):
+        warnings.append("Using default AUTH_USERNAME - change in production!")
+    
+    if os.getenv('AUTH_PASSWORD') == 'OneRing2RuleThemAll' or not os.getenv('AUTH_PASSWORD'):
+        warnings.append("Using default AUTH_PASSWORD - change in production!")
+    
+    # Print validation results
+    if warnings:
+        print("\n⚠️  PRODUCTION CONFIGURATION WARNINGS:", flush=True)
+        for warning in warnings:
+            print(f"   • {warning}", flush=True)
+        print("", flush=True)
+    
+    if issues:
+        print("\n❌ CRITICAL CONFIGURATION ISSUES:", flush=True)
+        for issue in issues:
+            print(f"   • {issue}", flush=True)
+        print("\nApplication may not work correctly!\n", flush=True)
+    
+    return len(issues) == 0
+
+
+# Run validation on import (works for both gunicorn and direct run)
+validate_production_config()
+
+
 if __name__ == '__main__':
-    print("🧙‍♂️ Starting WizardView...")
+    print("🧙‍♂️ Starting WizardView (Development Mode)...")
     print("   Gandalf's tool for regression clarity")
     print(f"   Using scrolls from: {ARTIFACTS_DIR}")
+    print("   ⚠️  DEBUG MODE ENABLED - Do not use in production!")
     app.run(debug=True, port=5001, host='127.0.0.1')
 
