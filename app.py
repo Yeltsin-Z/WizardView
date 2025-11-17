@@ -41,7 +41,10 @@ ARTIFACTS_DIR = Path(os.getenv('ARTIFACTS_DIR', str(default_artifacts)))
 # If default local path exists, use it (for development)
 local_dev_path = Path("/Users/yeltsinz/Downloads/regression-diffs (1)")
 if local_dev_path.exists():
+    print(f"⚠️  Using hardcoded dev path: {local_dev_path}", flush=True)
     ARTIFACTS_DIR = local_dev_path
+else:
+    print(f"✅ Using dynamic artifacts path: {ARTIFACTS_DIR}", flush=True)
 
 # Directory for storing ZIP files for Linear attachments
 LINEAR_ATTACHMENTS_DIR = Path(__file__).parent / 'linear_attachments'
@@ -80,13 +83,15 @@ def extract_artifact(zip_path, extract_to):
     Both are normalized to Format 2 internally.
     """
     import shutil
+    import tempfile
     
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        # Extract to a temporary location first
-        temp_extract = Path(extract_to) / '_temp_extract'
-        temp_extract.mkdir(parents=True, exist_ok=True)
-        zip_ref.extractall(temp_extract)
-        
+    # Use system temp directory to avoid conflicts
+    temp_extract = Path(tempfile.mkdtemp(prefix='wizardview_'))
+    
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_extract)
+            
         # Detect format and normalize
         print(f"📦 Analyzing artifact structure...", flush=True)
         
@@ -132,9 +137,15 @@ def extract_artifact(zip_path, extract_to):
                         shutil.copy2(file_path, target_path)
                         print(f"      ✓ Copied: {file_path.name}", flush=True)
         
-        # Clean up temp directory
-        shutil.rmtree(temp_extract)
         print(f"✅ Artifact extraction complete!\n", flush=True)
+        
+    finally:
+        # Always clean up temp directory
+        try:
+            shutil.rmtree(temp_extract)
+            print(f"🧹 Cleaned up temp directory", flush=True)
+        except Exception as e:
+            print(f"⚠️ Failed to clean temp directory: {e}", flush=True)
     
     return extract_to
 
@@ -157,16 +168,28 @@ def get_artifact_structure(base_path):
             files = sorted([f.name for f in folder.iterdir() if f.is_file()])
             
             # Group files by their base ID (e.g., CHART-426)
+            # Supports normalized format: feat-CHART-426 and main-CHART-426
             file_groups = {}
             for file_name in files:
-                # Extract base ID (everything before -feat or -main)
-                if '-feat' in file_name:
-                    base_id = file_name.replace('-feat', '')
+                # Check for normalized format (prefix): feat-FILE or main-FILE
+                if file_name.startswith('feat-'):
+                    base_id = file_name[5:]  # Remove 'feat-' prefix
                     if base_id not in file_groups:
                         file_groups[base_id] = {}
                     file_groups[base_id]['feat'] = file_name
-                elif '-main' in file_name:
-                    base_id = file_name.replace('-main', '')
+                elif file_name.startswith('main-'):
+                    base_id = file_name[5:]  # Remove 'main-' prefix
+                    if base_id not in file_groups:
+                        file_groups[base_id] = {}
+                    file_groups[base_id]['main'] = file_name
+                # Fallback: Check for legacy format (suffix): FILE-feat or FILE-main
+                elif file_name.endswith('-feat'):
+                    base_id = file_name[:-5]  # Remove '-feat' suffix
+                    if base_id not in file_groups:
+                        file_groups[base_id] = {}
+                    file_groups[base_id]['feat'] = file_name
+                elif file_name.endswith('-main'):
+                    base_id = file_name[:-5]  # Remove '-main' suffix
                     if base_id not in file_groups:
                         file_groups[base_id] = {}
                     file_groups[base_id]['main'] = file_name
@@ -419,34 +442,57 @@ def upload_artifact():
         return jsonify({'error': 'Only ZIP files are allowed'}), 400
     
     try:
+        print(f"\n📤 Upload received: {file.filename}", flush=True)
+        
         # Save uploaded file
         zip_path = UPLOAD_FOLDER / file.filename
         file.save(zip_path)
+        print(f"✅ File saved: {zip_path}", flush=True)
         
         # Extract to artifacts directory
         extract_to = UPLOAD_FOLDER / 'extracted'
         # Clear previous extraction
         if extract_to.exists():
+            print(f"🧹 Clearing previous extraction...", flush=True)
             shutil.rmtree(extract_to)
         extract_to.mkdir(exist_ok=True)
         
+        print(f"📦 Starting extraction...", flush=True)
         extract_artifact(zip_path, extract_to)
         
         # Update global artifacts directory (for this session)
         global ARTIFACTS_DIR
         ARTIFACTS_DIR = extract_to
+        print(f"✅ ARTIFACTS_DIR updated to: {ARTIFACTS_DIR}", flush=True)
         
         # Get structure to return
+        print(f"🔍 Getting artifact structure...", flush=True)
         structure = get_artifact_structure(ARTIFACTS_DIR)
+        print(f"✅ Found {len(structure)} tenant(s)", flush=True)
         
-        return jsonify({
+        # Clean up uploaded ZIP file
+        try:
+            zip_path.unlink()
+            print(f"🧹 Cleaned up: {zip_path}", flush=True)
+        except:
+            pass
+        
+        response_data = {
             'success': True,
             'message': 'Scroll uploaded and extracted successfully',
             'artifact_count': len(structure),
             'structure': structure
-        })
+        }
+        print(f"📨 Sending response: {len(str(response_data))} bytes\n", flush=True)
+        
+        return jsonify(response_data)
+        
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        error_msg = f"Upload error: {str(e)}"
+        print(f"❌ {error_msg}", flush=True)
+        traceback.print_exc()
+        return jsonify({'error': error_msg}), 500
 
 
 @app.route('/api/download-zip/<filename>')
