@@ -400,10 +400,20 @@ def compare():
     if not folder or not file_id:
         return jsonify({'error': 'Missing parameters'}), 400
     
-    feat_path = ARTIFACTS_DIR / folder / f"{file_id}-feat"
-    main_path = ARTIFACTS_DIR / folder / f"{file_id}-main"
+    # Try normalized format first (feat-FILE, main-FILE), then fallback to legacy (FILE-feat, FILE-main)
+    feat_path = ARTIFACTS_DIR / folder / f"feat-{file_id}"
+    main_path = ARTIFACTS_DIR / folder / f"main-{file_id}"
+    
+    # Fallback to legacy format if normalized doesn't exist
+    if not feat_path.exists():
+        feat_path = ARTIFACTS_DIR / folder / f"{file_id}-feat"
+    if not main_path.exists():
+        main_path = ARTIFACTS_DIR / folder / f"{file_id}-main"
     
     if not feat_path.exists() or not main_path.exists():
+        print(f"❌ Files not found for {folder}/{file_id}", flush=True)
+        print(f"   Tried: {feat_path}", flush=True)
+        print(f"   Tried: {main_path}", flush=True)
         return jsonify({'error': 'Files not found'}), 404
     
     # Read full file contents
