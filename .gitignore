@@ -19,3 +19,4 @@ start_local.sh
 *.crt
 !static/
 
+start.sh
