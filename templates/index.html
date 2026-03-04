@@ -185,6 +185,35 @@
             border-left: 3px solid transparent;
         }
 
+        .tenant-bug-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 5px 10px;
+            background: transparent;
+            border: 1px solid #d1d5da;
+            border-radius: 6px;
+            font-size: 0.78em;
+            font-weight: 600;
+            color: #586069;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+            opacity: 0;
+        }
+
+        .folder-header:hover .tenant-bug-btn {
+            opacity: 1;
+        }
+
+        .tenant-bug-btn:hover {
+            background: #fff3cd;
+            border-color: #fb8500;
+            color: #664d03;
+            transform: none;
+            box-shadow: 0 2px 6px rgba(251, 133, 0, 0.2);
+        }
+
         .folder-header:hover {
             background: #f6f8fa;
         }
@@ -1228,6 +1257,7 @@
             let html = '';
             for (const [folderId, fileGroups] of Object.entries(currentStructure)) {
                 const fileCount = Object.keys(fileGroups).length;
+                const fileIds = Object.keys(fileGroups).join(',');
                 html += `
                     <div class="folder-group">
                         <div class="folder-header" onclick="toggleFolder('${folderId}')">
@@ -1235,7 +1265,12 @@
                                 <span class="folder-icon">📁</span>
                                 <span>Tenant ${folderId}</span>
                             </span>
-                            <span class="folder-count">${fileCount}</span>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <button class="tenant-bug-btn" onclick="event.stopPropagation(); openTenantLinearModal('${folderId}', ${fileCount})" title="Report bug for entire tenant">
+                                    🐞 Report Bug
+                                </button>
+                                <span class="folder-count">${fileCount}</span>
+                            </div>
                         </div>
                         <div class="file-list" id="folder-${folderId}">
                 `;
@@ -1373,10 +1408,17 @@
                 </div>
             `;
 
-            // Create diff container
+            // Create diff container with loading spinner
             const diffContainer = document.createElement('div');
             diffContainer.className = 'diff-container';
             diffContainer.id = 'monaco-diff-editor';
+            // Show loading spinner while Monaco initializes
+            diffContainer.innerHTML = `
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>Rendering diff editor...</p>
+                </div>
+            `;
 
             editorContent.innerHTML = '';
             editorContent.appendChild(header);
@@ -1407,6 +1449,9 @@
                         const modifiedContent = data.feat_content || '';
 
                         console.log('Creating Monaco Diff Editor...');
+                        
+                        // Clear loading spinner
+                        diffContainer.innerHTML = '';
 
                         // Define custom light theme with our colors
                         monaco.editor.defineTheme('staffview-light-theme', {
@@ -1614,6 +1659,10 @@
         // Fallback simple diff view
         function renderSimpleDiff(data, container) {
             console.log('Using simple diff fallback');
+            
+            // Clear loading spinner
+            container.innerHTML = '';
+            
             const mainLines = data.main_content.split('\n');
             const featLines = data.feat_content.split('\n');
             
@@ -1640,7 +1689,6 @@
                 return panel;
             };
             
-            container.innerHTML = '';
             container.appendChild(createPanel(mainLines, 'main'));
             container.appendChild(createPanel(featLines, 'feat'));
         }
@@ -1712,8 +1760,52 @@
         // Linear Integration
         let currentLinearData = {};
 
+        function openTenantLinearModal(folderId, fileCount) {
+            currentLinearData = {
+                mode: 'tenant',
+                folderId: folderId,
+                fileCount: fileCount
+            };
+
+            const modal = document.getElementById('linearModal');
+            const titleInput = document.getElementById('linearTitle');
+            const descriptionPreview = document.getElementById('linearDescriptionPreview');
+
+            // Set modal header label
+            modal.querySelector('.linear-modal-title span:last-child').textContent = 'Report Tenant Bug';
+
+            // Set the title
+            titleInput.value = `Gandalf's WizardView Report for Tenant ${folderId}`;
+
+            // Build description preview
+            descriptionPreview.innerHTML = `
+                <div>
+                    <div class="linear-preview-summary">
+                        <div class="linear-preview-badge">
+                            <strong>Tenant:</strong> <span>${folderId}</span>
+                        </div>
+                        <div class="linear-preview-badge">
+                            <strong>Files:</strong> <span style="color: #d73a49; font-weight: 600;">${fileCount}</span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 10px; padding: 8px 10px; background: #fff3cd; border-radius: 6px; font-size: 0.82em; color: #664d03; border: 1px solid #ffc947;">
+                        📊 Aggregate diff stats will be computed from all ${fileCount} file(s) in this tenant.
+                    </div>
+                </div>
+            `;
+
+            // Reset ZIP toggle
+            const attachZipToggle = document.getElementById('attachZipToggle');
+            attachZipToggle.checked = true;
+            attachZipToggle.onchange = null;
+
+            loadLinearTeamMembers();
+            modal.style.display = 'block';
+        }
+
         function openLinearModal(folderId, fileId, diffData) {
             currentLinearData = {
+                mode: 'file',
                 folderId: folderId,
                 fileId: fileId,
                 diffData: diffData
@@ -1721,6 +1813,9 @@
 
             const modal = document.getElementById('linearModal');
             const titleInput = document.getElementById('linearTitle');
+
+            // Reset modal header label
+            modal.querySelector('.linear-modal-title span:last-child').textContent = 'Report Bug';
             const descriptionPreview = document.getElementById('linearDescriptionPreview');
             
             // Set the title
@@ -1860,6 +1955,8 @@
             const modal = document.getElementById('linearModal');
             modal.style.display = 'none';
             currentLinearData = {};
+            // Reset modal title back to default
+            modal.querySelector('.linear-modal-title span:last-child').textContent = 'Report Bug';
         }
 
         function toggleLinearPreview() {
@@ -1918,19 +2015,29 @@
             submitBtn.textContent = 'Creating...';
             
             try {
-                // Create the Linear issue with optional ZIP attachment
-                const response = await fetchAPI('/api/linear/create-issue', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
+                const isTenantMode = currentLinearData.mode === 'tenant';
+                const endpoint = isTenantMode
+                    ? '/api/linear/create-tenant-issue'
+                    : '/api/linear/create-issue';
+
+                const payload = isTenantMode
+                    ? {
+                        folderId: currentLinearData.folderId,
+                        assigneeId: assigneeId,
+                        attachZip: attachZip
+                    }
+                    : {
                         folderId: currentLinearData.folderId,
                         fileId: currentLinearData.fileId,
                         assigneeId: assigneeId,
                         stats: currentLinearData.diffData.stats,
                         attachZip: attachZip
-                    })
+                    };
+
+                const response = await fetchAPI(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
                 });
                 
                 const data = await response.json();
@@ -1938,8 +2045,6 @@
                 if (data.success) {
                     showToast('Linear issue created successfully! 🎉', '✅');
                     closeLinearModal();
-                    
-                    // Open the Linear issue in a new tab
                     if (data.issueUrl) {
                         window.open(data.issueUrl, '_blank');
                     }

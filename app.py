@@ -1188,6 +1188,234 @@ def create_linear_issue():
         return jsonify({'success': False, 'error': f'Failed to parse issue response: {str(e)}'}), 500
 
 
+@app.route('/api/linear/create-tenant-issue', methods=['POST'])
+@login_required
+def create_linear_tenant_issue():
+    """Create a Linear issue summarising all files for an entire tenant"""
+    if not LINEAR_API_KEY:
+        return jsonify({
+            'success': False,
+            'error': 'Linear API key not configured. Please set LINEAR_API_KEY environment variable.'
+        }), 400
+
+    team_uuid = get_team_uuid(LINEAR_TEAM_ID)
+    if not team_uuid:
+        return jsonify({
+            'success': False,
+            'error': f'Could not find team with key: {LINEAR_TEAM_ID}'
+        }), 404
+
+    data = request.json
+    folder_id = data.get('folderId')
+    assignee_id = data.get('assigneeId')
+    attach_zip = data.get('attachZip', True)
+
+    if not all([folder_id, assignee_id]):
+        return jsonify({'success': False, 'error': 'Missing required fields'}), 400
+
+    print(f"\n{'='*60}", flush=True)
+    print(f"📝 Creating tenant-level Linear issue for Tenant {folder_id}", flush=True)
+    print(f"{'='*60}\n", flush=True)
+
+    app_url = os.environ.get('WIZARDVIEW_URL', 'https://wizardview.onrender.com')
+
+    # --- Aggregate stats across all files in the tenant ---
+    structure = get_artifact_structure(ARTIFACTS_DIR)
+    tenant_files = structure.get(folder_id, {})
+
+    if not tenant_files:
+        return jsonify({'success': False, 'error': f'No files found for tenant {folder_id}'}), 404
+
+    total_stats = {'added': 0, 'removed': 0, 'modified': 0, 'unchanged': 0}
+    file_stats_rows = []
+    tenant_path = ARTIFACTS_DIR / folder_id
+
+    for file_id, files in tenant_files.items():
+        if 'main' not in files or 'feat' not in files:
+            continue
+        main_path = tenant_path / files['main']
+        feat_path = tenant_path / files['feat']
+        try:
+            with open(main_path, 'r', encoding='utf-8') as f:
+                main_content = f.read()
+            with open(feat_path, 'r', encoding='utf-8') as f:
+                feat_content = f.read()
+            s = calculate_diff_stats(main_content, feat_content)
+            for k in total_stats:
+                total_stats[k] += s.get(k, 0)
+            file_stats_rows.append({
+                'file_id': file_id,
+                'added': s.get('added', 0),
+                'removed': s.get('removed', 0),
+                'modified': s.get('modified', 0),
+                'unchanged': s.get('unchanged', 0),
+            })
+        except Exception as e:
+            print(f"⚠️  Could not compute stats for {file_id}: {e}", flush=True)
+
+    # Build per-file stats table for the issue description
+    file_table_lines = []
+    for row in file_stats_rows:
+        changes = row['added'] + row['removed'] + row['modified']
+        file_table_lines.append(
+            f"| {row['file_id']} | +{row['added']} | -{row['removed']} | ~{row['modified']} | {changes} |"
+        )
+    file_table = "\n".join(file_table_lines)
+
+    total_changes = total_stats['added'] + total_stats['removed'] + total_stats['modified']
+
+    description = f"""📊 Tenant Regression Diff Report
+
+**Tenant**: {folder_id}
+**Files Compared**: {len(file_stats_rows)}
+
+**Aggregate Statistics**:
+✅ Added: {total_stats['added']}
+❌ Removed: {total_stats['removed']}
+⚠️ Modified: {total_stats['modified']}
+⚪ Unchanged: {total_stats['unchanged']}
+
+**Total Changes**: {total_changes} items affected
+
+---
+
+### Per-File Breakdown
+
+| File | Added | Removed | Modified | Total Changes |
+|------|-------|---------|----------|---------------|
+{file_table}
+
+---
+📦 **Attached ZIP**: Contains all main and feat files for tenant {folder_id}
+🔗 **View in WizardView**: Upload the attached ZIP at [{app_url}]({app_url}) to compare interactively
+"""
+
+    # --- Build a ZIP with all files in the tenant (if requested) ---
+    zip_file_data = None
+    if attach_zip:
+        try:
+            filename = f"tenant-{folder_id}-all.zip"
+            zip_filepath = LINEAR_ATTACHMENTS_DIR / filename
+
+            with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for file_id, files in tenant_files.items():
+                    for branch_key in ('main', 'feat'):
+                        if branch_key in files:
+                            src = tenant_path / files[branch_key]
+                            arcname = f"{folder_id}/{files[branch_key]}"
+                            zipf.write(src, arcname)
+                            print(f"  ✅ Added to ZIP: {arcname}", flush=True)
+
+            zip_file_data = {
+                'filename': filename,
+                'filepath': str(zip_filepath),
+                'size': zip_filepath.stat().st_size,
+            }
+            print(f"✅ Tenant ZIP created: {zip_filepath} ({zip_file_data['size']} bytes)", flush=True)
+        except Exception as e:
+            print(f"❌ Failed to create tenant ZIP: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+
+    # --- Fetch active cycle ---
+    cycle_id = None
+    cycle_result = linear_graphql_request(
+        """query ActiveCycle($teamId: String!) {
+            team(id: $teamId) { activeCycle { id name } }
+        }""",
+        {'teamId': team_uuid}
+    )
+    if 'data' in cycle_result:
+        try:
+            cycle_id = cycle_result['data']['team']['activeCycle']['id']
+        except (KeyError, TypeError):
+            pass
+
+    # --- Fetch "Todo" state ---
+    issue_input = {
+        'teamId': team_uuid,
+        'title': f"Gandalf's WizardView Report for Tenant {folder_id}",
+        'description': description,
+        'assigneeId': assignee_id,
+        'priority': 2,
+    }
+
+    state_result = linear_graphql_request(
+        """query TeamStates($teamId: String!) {
+            team(id: $teamId) { states { nodes { id name type } } }
+        }""",
+        {'teamId': team_uuid}
+    )
+    if 'data' in state_result:
+        try:
+            states = state_result['data']['team']['states']['nodes']
+            todo_state = next((s['id'] for s in states if s['name'].lower() == 'todo'), None)
+            backlog_state = next((s['id'] for s in states if s['name'].lower() == 'backlog'), None)
+            chosen = todo_state or backlog_state
+            if chosen:
+                issue_input['stateId'] = chosen
+        except (KeyError, TypeError):
+            pass
+
+    if cycle_id:
+        issue_input['cycleId'] = cycle_id
+
+    # --- Create the issue ---
+    create_result = linear_graphql_request(
+        """mutation IssueCreate($input: IssueCreateInput!) {
+            issueCreate(input: $input) {
+                success
+                issue { id identifier url }
+            }
+        }""",
+        {'input': issue_input}
+    )
+
+    if 'error' in create_result:
+        return jsonify({'success': False, 'error': create_result['error']}), 500
+    if 'errors' in create_result:
+        return jsonify({'success': False, 'error': create_result['errors'][0]['message']}), 500
+
+    try:
+        issue_data = create_result['data']['issueCreate']
+        if not issue_data['success']:
+            return jsonify({'success': False, 'error': 'Failed to create issue'}), 500
+
+        issue_id = issue_data['issue']['id']
+        issue_identifier = issue_data['issue']['identifier']
+        issue_url = issue_data['issue']['url']
+        print(f"✅ Tenant issue created: {issue_identifier}", flush=True)
+
+        # --- Attach ZIP ---
+        if zip_file_data:
+            zip_download_url = f"{app_url}/api/download-zip/{zip_file_data['filename']}"
+            attachment_result = linear_graphql_request(
+                """mutation AttachmentLinkURL($issueId: String!, $url: String!, $title: String) {
+                    attachmentLinkURL(issueId: $issueId, url: $url, title: $title) {
+                        success lastSyncId
+                    }
+                }""",
+                {
+                    'issueId': issue_id,
+                    'url': zip_download_url,
+                    'title': f"📦 {zip_file_data['filename']}",
+                }
+            )
+            if attachment_result.get('data', {}).get('attachmentLinkURL', {}).get('success'):
+                print(f"   ✅ ZIP attachment linked to issue", flush=True)
+            else:
+                print(f"   ⚠️  ZIP attachment failed: {attachment_result}", flush=True)
+
+        return jsonify({
+            'success': True,
+            'issueId': issue_id,
+            'issueIdentifier': issue_identifier,
+            'issueUrl': issue_url,
+        })
+    except (KeyError, TypeError) as e:
+        return jsonify({'success': False, 'error': f'Failed to parse issue response: {str(e)}'}), 500
+
+
 def validate_production_config():
     """Validate configuration for production deployment"""
     issues = []
