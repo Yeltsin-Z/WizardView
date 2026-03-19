@@ -1226,64 +1226,13 @@ def create_linear_tenant_issue():
     if not tenant_files:
         return jsonify({'success': False, 'error': f'No files found for tenant {folder_id}'}), 404
 
-    total_stats = {'added': 0, 'removed': 0, 'modified': 0, 'unchanged': 0}
-    file_stats_rows = []
     tenant_path = ARTIFACTS_DIR / folder_id
-
-    for file_id, files in tenant_files.items():
-        if 'main' not in files or 'feat' not in files:
-            continue
-        main_path = tenant_path / files['main']
-        feat_path = tenant_path / files['feat']
-        try:
-            with open(main_path, 'r', encoding='utf-8') as f:
-                main_content = f.read()
-            with open(feat_path, 'r', encoding='utf-8') as f:
-                feat_content = f.read()
-            s = calculate_diff_stats(main_content, feat_content)
-            for k in total_stats:
-                total_stats[k] += s.get(k, 0)
-            file_stats_rows.append({
-                'file_id': file_id,
-                'added': s.get('added', 0),
-                'removed': s.get('removed', 0),
-                'modified': s.get('modified', 0),
-                'unchanged': s.get('unchanged', 0),
-            })
-        except Exception as e:
-            print(f"⚠️  Could not compute stats for {file_id}: {e}", flush=True)
-
-    # Build per-file stats table for the issue description
-    file_table_lines = []
-    for row in file_stats_rows:
-        changes = row['added'] + row['removed'] + row['modified']
-        file_table_lines.append(
-            f"| {row['file_id']} | +{row['added']} | -{row['removed']} | ~{row['modified']} | {changes} |"
-        )
-    file_table = "\n".join(file_table_lines)
-
-    total_changes = total_stats['added'] + total_stats['removed'] + total_stats['modified']
+    file_count = len(tenant_files)
 
     description = f"""📊 Tenant Regression Diff Report
 
 **Tenant**: {folder_id}
-**Files Compared**: {len(file_stats_rows)}
-
-**Aggregate Statistics**:
-✅ Added: {total_stats['added']}
-❌ Removed: {total_stats['removed']}
-⚠️ Modified: {total_stats['modified']}
-⚪ Unchanged: {total_stats['unchanged']}
-
-**Total Changes**: {total_changes} items affected
-
----
-
-### Per-File Breakdown
-
-| File | Added | Removed | Modified | Total Changes |
-|------|-------|---------|----------|---------------|
-{file_table}
+**Files**: {file_count} comparison(s)
 
 ---
 📦 **Attached ZIP**: Contains all main and feat files for tenant {folder_id}
@@ -1388,23 +1337,27 @@ def create_linear_tenant_issue():
 
         # --- Attach ZIP ---
         if zip_file_data:
-            zip_download_url = f"{app_url}/api/download-zip/{zip_file_data['filename']}"
-            attachment_result = linear_graphql_request(
-                """mutation AttachmentLinkURL($issueId: String!, $url: String!, $title: String) {
-                    attachmentLinkURL(issueId: $issueId, url: $url, title: $title) {
-                        success lastSyncId
+            try:
+                zip_download_url = f"{app_url}/api/download-zip/{zip_file_data['filename']}"
+                attachment_result = linear_graphql_request(
+                    """mutation AttachmentLinkURL($issueId: String!, $url: String!, $title: String) {
+                        attachmentLinkURL(issueId: $issueId, url: $url, title: $title) {
+                            success lastSyncId
+                        }
+                    }""",
+                    {
+                        'issueId': issue_id,
+                        'url': zip_download_url,
+                        'title': f"📦 {zip_file_data['filename']}",
                     }
-                }""",
-                {
-                    'issueId': issue_id,
-                    'url': zip_download_url,
-                    'title': f"📦 {zip_file_data['filename']}",
-                }
-            )
-            if attachment_result.get('data', {}).get('attachmentLinkURL', {}).get('success'):
-                print(f"   ✅ ZIP attachment linked to issue", flush=True)
-            else:
-                print(f"   ⚠️  ZIP attachment failed: {attachment_result}", flush=True)
+                )
+                if attachment_result.get('data', {}).get('attachmentLinkURL', {}).get('success'):
+                    print(f"   ✅ ZIP attachment linked to issue", flush=True)
+                else:
+                    print(f"   ⚠️  ZIP attachment failed: {attachment_result}", flush=True)
+            except Exception as e:
+                print(f"   ❌ Exception during ZIP attachment: {str(e)}", flush=True)
+                # Continue — issue was already created successfully
 
         return jsonify({
             'success': True,

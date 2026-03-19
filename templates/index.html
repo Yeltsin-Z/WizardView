@@ -189,29 +189,29 @@
             display: inline-flex;
             align-items: center;
             gap: 5px;
-            padding: 5px 10px;
-            background: transparent;
-            border: 1px solid #d1d5da;
-            border-radius: 6px;
-            font-size: 0.78em;
-            font-weight: 600;
-            color: #586069;
+            padding: 4px 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 20px;
+            font-size: 0.75em;
+            font-weight: 700;
+            color: #fff;
             cursor: pointer;
-            transition: all 0.2s ease;
+            transition: all 0.25s ease;
             white-space: nowrap;
-            opacity: 0;
-        }
-
-        .folder-header:hover .tenant-bug-btn {
-            opacity: 1;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+            letter-spacing: 0.02em;
         }
 
         .tenant-bug-btn:hover {
-            background: #fff3cd;
-            border-color: #fb8500;
-            color: #664d03;
-            transform: none;
-            box-shadow: 0 2px 6px rgba(251, 133, 0, 0.2);
+            background: linear-gradient(135deg, #5a6fd6 0%, #6a3d92 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 16px rgba(102, 126, 234, 0.6);
+        }
+
+        .tenant-bug-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
         }
 
         .folder-header:hover {
@@ -1789,7 +1789,7 @@
                         </div>
                     </div>
                     <div style="margin-top: 10px; padding: 8px 10px; background: #fff3cd; border-radius: 6px; font-size: 0.82em; color: #664d03; border: 1px solid #ffc947;">
-                        📊 Aggregate diff stats will be computed from all ${fileCount} file(s) in this tenant.
+                        📦 All ${fileCount} file(s) from this tenant will be included in the attached ZIP for review in WizardView.
                     </div>
                 </div>
             `;
